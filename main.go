@@ -1,9 +1,14 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/md5"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 
@@ -73,6 +78,28 @@ func main() {
 
 }
 
+////////////////////////////////////// INICIO ENCRIPTACION /////////////////////////////////////
+
+func encriptarPass(pass string, clave string) string {
+	hashMD5 := MD5Hash(pass)
+	hashHMAC := HMACHash(hashMD5, clave)
+	return hashHMAC
+}
+
+func MD5Hash(pass string) string {
+	hash := md5.New()
+	hash.Write([]byte(pass))
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func HMACHash(pass string, clave string) string {
+	hash := hmac.New(sha256.New, []byte(clave))
+	io.WriteString(hash, pass)
+	return fmt.Sprintf("%x", hash.Sum(nil))
+}
+
+///////////////////////////////// FIN ENCRIPTACION ////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////// INICIO API LIBROS ////////////////////////////
 
 ////////////////// GET LIBROS ////////////////////////
@@ -473,7 +500,9 @@ func postUsuario(w http.ResponseWriter, r *http.Request) {
 	rol := key["rol"]
 	tok := key["tok"]
 
-	_, err = stmt.Exec(&id, &nombre, &password, &email, &rol, &tok)
+	pass := encriptarPass(password, email)
+
+	_, err = stmt.Exec(&id, &nombre, &pass, &email, &rol, &tok)
 	if err != nil {
 		panic(err.Error())
 	}
