@@ -11,7 +11,9 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"time"
 
+	"github.com/dgrijalva/jwt-go"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
 )
@@ -41,6 +43,13 @@ type Usuario struct {
 	Tok      string `json:"tok"`
 }
 
+type Token struct {
+	//Id     uint
+	Nombre string
+	Email  string
+	*jwt.StandardClaims
+}
+
 var db *sql.DB
 var err error
 
@@ -51,6 +60,9 @@ func main() {
 	}
 
 	defer db.Close()
+
+	token := recuperarToken("13")
+	fmt.Println("Main token: ", token)
 
 	router := mux.NewRouter()
 
@@ -74,6 +86,9 @@ func main() {
 	router.HandleFunc("/api/usuarios/{id}", putUsuario).Methods("PUT")
 	router.HandleFunc("/api/usuarios/{id}", deleteUsuario).Methods("DELETE")
 
+	router.HandleFunc("/api/registro", postUsuario).Methods("POST")
+	router.HandleFunc("/api/login", login).Methods("POST")
+
 	http.ListenAndServe(":8000", router)
 
 }
@@ -96,6 +111,158 @@ func HMACHash(pass string, clave string) string {
 	hash := hmac.New(sha256.New, []byte(clave))
 	io.WriteString(hash, pass)
 	return fmt.Sprintf("%x", hash.Sum(nil))
+}
+
+func validarPass(passInput, passwordDB string) bool {
+
+	bytePassDB := []byte(passwordDB)
+
+	byteInput := []byte(passInput)
+
+	resHMAC := hmac.Equal(byteInput, bytePassDB)
+
+	return resHMAC
+}
+
+func login(w http.ResponseWriter, r *http.Request) {
+
+	user := &Usuario{}
+	err := json.NewDecoder(r.Body).Decode(user)
+
+	if err != nil {
+		var resp = map[string]interface{}{"status": false, "message": "Invalid request"}
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+	resp := encontrarUsuario(user.Password, user.Email)
+
+	json.NewEncoder(w).Encode(resp)
+}
+
+func encontrarUsuario(password, email string) map[string]interface{} {
+	var user []Usuario
+	var ok bool
+	var id string
+	var nombre string
+	var passDB string
+	var mail string
+
+	expireAt := time.Now().Add(time.Minute * 5).Unix()
+
+	result, err := db.Query("SELECT * FROM usuarios WHERE email like ?", &email)
+	if err != nil {
+		var resp = map[string]interface{}{"status": 404, "message": "Email not found"}
+		return resp
+	}
+	defer result.Close()
+
+	for result.Next() {
+		var usuario Usuario
+		err := result.Scan(&usuario.Id, &usuario.Nombre, &usuario.Password, &usuario.Email, &usuario.Rol, &usuario.Tok)
+		if err != nil {
+			panic(err.Error())
+		}
+		user = append(user, usuario)
+
+		id = usuario.Id
+		nombre = usuario.Nombre
+		passDB = usuario.Password
+		mail = usuario.Email
+	}
+
+	contra := encriptarPass(password, email)
+
+	ok = validarPass(contra, passDB)
+	if !ok || email != mail {
+		var resp = map[string]interface{}{"status": false, "message": "No coinciden las contraseñas, login invalido"}
+		return resp
+	}
+
+	claims := Token{
+		Nombre: nombre,
+		Email:  mail,
+		StandardClaims: &jwt.StandardClaims{
+			ExpiresAt: expireAt,
+		},
+	}
+
+	Secret := []byte(mail)
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(Secret)
+	if err != nil {
+		var resp = map[string]interface{}{"status": false, "message": "No se ha creado el token"}
+		return resp
+	}
+	var resp = map[string]interface{}{"status": "Ok", "message": "logged in"}
+	resp["token"] = tokenString //Store the token in the response
+	fmt.Println("Token string: ", tokenString)
+
+	guardarToken(tokenString, id)
+
+	return resp
+}
+
+func guardarToken(token, id string) {
+
+	var iddb string
+	var nombre string
+	var passwd string
+	var email string
+	var rol string
+	var tok string
+
+	result, err := db.Query("SELECT * FROM usuarios WHERE id = ?", &id)
+	if err != nil {
+		panic(err.Error())
+	}
+	defer result.Close()
+
+	var usuario Usuario
+
+	for result.Next() {
+		err := result.Scan(&usuario.Id, &usuario.Nombre, &usuario.Password, &usuario.Email, &usuario.Rol, &usuario.Tok)
+		if err != nil {
+			panic(err.Error())
+		}
+	}
+	iddb = usuario.Id
+	nombre = usuario.Nombre
+	passwd = usuario.Password
+	email = usuario.Email
+	rol = usuario.Rol
+	tok = token
+
+	stmt, err := db.Prepare("UPDATE usuarios SET id = ?, nombre = ?, password = ?, email = ?, rol = ?, tok = ? WHERE id = ?")
+	if err != nil {
+		panic(err.Error())
+	}
+
+	_, err = stmt.Exec(iddb, nombre, passwd, email, rol, tok, id)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	fmt.Println("ESTO ES SOLO POST TOKEN")
+
+}
+
+func recuperarToken(id string) string {
+	result, err := db.Query("SELECT tok FROM usuarios WHERE id = ?", &id)
+	if err != nil {
+		panic(err.Error())
+	}
+	defer result.Close()
+
+	var usuario Usuario
+
+	for result.Next() {
+		err := result.Scan(&usuario.Tok)
+		if err != nil {
+			panic(err.Error())
+		}
+	}
+
+	return usuario.Tok
 }
 
 ///////////////////////////////// FIN ENCRIPTACION ////////////////////////////////
