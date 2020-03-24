@@ -10,11 +10,13 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 )
 
@@ -89,7 +91,11 @@ func main() {
 	router.HandleFunc("/api/registro", postUsuario).Methods("POST")
 	router.HandleFunc("/api/login", login).Methods("POST")
 
-	http.ListenAndServe(":8000", router)
+	//http.ListenAndServe(":8000", router)
+	log.Fatal(http.ListenAndServe(":8000", handlers.CORS(
+		handlers.AllowedHeaders([]string{"X-Requested-With", "Content-Type", "Authorization"}),
+		handlers.AllowedMethods([]string{"GET", "POST", "PUT", "HEAD", "DELETE", "OPTIONS"}),
+		handlers.AllowedOrigins([]string{"*"}))(router)))
 
 }
 
@@ -194,7 +200,7 @@ func encontrarUsuario(password, email string) map[string]interface{} {
 		return resp
 	}
 	var resp = map[string]interface{}{"status": "Ok", "message": "logged in"}
-	resp["token"] = tokenString //Store the token in the response
+	resp["token"] = tokenString
 	fmt.Println("Token string: ", tokenString)
 
 	guardarToken(tokenString, id)
@@ -263,6 +269,33 @@ func recuperarToken(id string) string {
 	}
 
 	return usuario.Tok
+}
+
+func crearToken(id, nombre, password, email string) string {
+
+	expireAt := time.Now().Add(time.Minute * 5).Unix()
+	claims := Token{
+		Nombre: nombre,
+		Email:  email,
+		StandardClaims: &jwt.StandardClaims{
+			ExpiresAt: expireAt,
+		},
+	}
+
+	Secret := []byte(email)
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(Secret)
+	if err != nil {
+		panic(err.Error())
+
+	}
+	resp := tokenString
+
+	fmt.Println("Token string: ", tokenString)
+
+	guardarToken(tokenString, id)
+
+	return resp
 }
 
 ///////////////////////////////// FIN ENCRIPTACION ////////////////////////////////
@@ -668,13 +701,17 @@ func postUsuario(w http.ResponseWriter, r *http.Request) {
 	tok := key["tok"]
 
 	pass := encriptarPass(password, email)
+	tok = crearToken(id, nombre, password, email)
 
 	_, err = stmt.Exec(&id, &nombre, &pass, &email, &rol, &tok)
 	if err != nil {
 		panic(err.Error())
 	}
 
-	fmt.Fprintf(w, "Se ha añadido un nuevo usuario")
+	respu := json.NewEncoder(w).Encode(&tok)
+	fmt.Println(respu)
+
+	fmt.Fprintf(w, "Se ha añadido un nuevo usuario de nuevo")
 	fmt.Println()
 	fmt.Println("ESTO ES POST USUARIOS")
 }
